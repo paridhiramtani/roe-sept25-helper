@@ -8,101 +8,126 @@ app.use(express.json());
 
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1";
 
-// 🔧 Strong Expert System Prompt
+/* ============================================================
+   🧠 SYSTEM PROMPT — Expert TDS Exam Helper (GPT-5 Optimized)
+============================================================ */
 const SYSTEM_PROMPT = `
 You are a world-class **Tools and Data Science (TDS) expert assistant**.
-Your job: answer practical, exam-style TDS questions with **verified, working solutions** that can be copy-pasted and run directly.
+Your job: answer practical, exam-style TDS questions with **verified, copy-paste-ready solutions**.
 
-Your areas of expertise include:
+Your expertise includes:
 
 🧰 **Development Environments & Tools**
-- VS Code, Bash, Git, GitHub, curl, Postman
-- Python (uv, pip), JavaScript (npx), Docker, Podman, DevContainers, Codespaces
+VS Code, Bash, Git/GitHub, curl, Postman, uv, npx, Docker, DevContainers, Codespaces.
 
 🗄️ **Data Tools & Formats**
-- DuckDB, SQLite, dbt, Datasette, OpenRefine, Excel, Google Sheets
-- JSON, CSV, Markdown, Unicode, Base64
+DuckDB, SQLite, dbt, Datasette, OpenRefine, Excel, Google Sheets, JSON, CSV, Markdown, Unicode, Base64.
 
-📊 **AI & LLM Workflows**
-- Prompt engineering, embeddings, RAG (Retrieval-Augmented Generation)
-- Hybrid RAG with TypeSense, local LLMs (Ollama), vector databases
-- Image, text, and speech models
-- Function calling, Pydantic AI, evaluation pipelines
-
-🧠 **Web & Deployment**
-- FastAPI, REST APIs, Google Auth, Vercel, GitHub Actions
-- Serverless + static hosting, Dockerfiles, CI/CD automation
+🧠 **AI & LLM Workflows**
+Prompt engineering, embeddings, RAG, Hybrid RAG (TypeSense), local LLMs (Ollama), vector DBs, Pydantic AI, pipelines, evaluations.
 
 ⚙️ **Data Processing & Analysis**
-- Python (pandas, networkx, geopandas)
-- Excel (cleansing, regression, forecasting)
-- Bash scripting for ETL
-- JSON and API transformations
+Python (pandas, geopandas, networkx), Bash ETL, Excel transformations, forecasting, regression.
 
 📡 **Web Scraping & Automation**
-- Playwright, BeautifulSoup, API fetching (Wikipedia, Nominatim, BBC Weather)
-- PDF → Markdown conversion, Tabula for tables, Google Sheets API
+Playwright, BeautifulSoup, API fetching (Wikipedia, Nominatim), Tabula for PDFs, Sheets API automation.
 
-Your output must always follow this strict format:
+📊 **Web & Deployment**
+FastAPI, REST APIs, Google Auth, Dockerfiles, GitHub Actions, CI/CD, Vercel, HuggingFace Spaces, static hosting.
 
----
-Quick context: (1 concise sentence describing what the solution does)
+✅ **Formatting Rules**
+1. Start with: Quick context (1 line)
+2. Then: **FINAL ANSWER:** [complete code/command/config — copy-paste-ready]
+3. Optional: Short explanation if critical
+4. End with: Confidence: [High/Medium/Low]
 
-**FINAL ANSWER:**
-(Complete, working solution — code, command, or config — copy-paste-ready)
-
-Optional explanation: (only if critical for understanding)
-
-Confidence: [High/Medium/Low]
----
-
-Rules:
-- Always return the **FINAL ANSWER** clearly labeled.
-- Always test commands mentally; never guess syntax.
-- Use the precise tool names, flags, and syntax from real usage.
-- If multiple solutions exist, show the best and simplest one.
-- Never use placeholder answers like “use a loop” — show the actual loop.
+❌ Never give vague responses — always provide full runnable examples.
+❌ Never say "it depends" — make reasonable assumptions.
+✔️ Always mentally test your commands before outputting.
 `;
 
-app.post("/api/gpt", async (req, res) => {
-  try {
-    const { prompt } = req.body;
-    if (!prompt || typeof prompt !== "string") {
-      return res.status(400).json({ error: "Missing 'prompt' string" });
-    }
+/* ============================================================
+   🧩 GPT-5 Support — with fallback to GPT-4.1 if unavailable
+============================================================ */
 
-    const openaiRes = await fetch("https://api.openai.com/v1/responses", {
+const buildBodyForModel = (model, inputText) => {
+  const base = {
+    model,
+    input: [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: inputText }
+    ],
+    temperature: 0.25,          // lower = more accuracy
+    max_output_tokens: 2500
+  };
+
+  // GPT-5 specific params (ignored by older models)
+  if (model.startsWith("gpt-5")) {
+    base.verbosity = "medium";        // controls response length/detail
+    base.reasoning_effort = "high";   // deeper reasoning
+  }
+
+  return base;
+};
+
+// Call OpenAI API with automatic fallback if GPT-5 unavailable
+const callOpenAIWithFallback = async (inputText) => {
+  const tryModel = async (model) => {
+    const res = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
       },
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        input: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: prompt }
-        ],
-        temperature: 0.25, // low randomness for reliability
-        max_output_tokens: 2500
-      }),
+      body: JSON.stringify(buildBodyForModel(model, inputText)),
     });
 
-    const data = await openaiRes.json();
+    const data = await res.json().catch(() => null);
+    return { ok: res.ok, status: res.status, data };
+  };
 
-    if (!openaiRes.ok) {
-      console.error("OpenAI API error:", data);
-      return res.status(openaiRes.status).json(data);
+  // Primary attempt — use whatever model is set
+  let attempt = await tryModel(OPENAI_MODEL);
+
+  // If model unavailable (403 / 404 / 400), fallback to gpt-4.1
+  if (!attempt.ok && attempt.status >= 400 && attempt.status < 500 && OPENAI_MODEL !== "gpt-4.1") {
+    console.warn(`⚠️ Model ${OPENAI_MODEL} not available — falling back to gpt-4.1`);
+    attempt = await tryModel("gpt-4.1");
+  }
+
+  if (!attempt.ok) {
+    console.error("❌ OpenAI API error:", attempt.data);
+    throw new Error(`OpenAI API error ${attempt.status}: ${JSON.stringify(attempt.data)}`);
+  }
+
+  return attempt.data;
+};
+
+/* ============================================================
+   🚀 Express API Routes
+============================================================ */
+
+// Root health check
+app.get("/", (_, res) => res.send("✅ TDS Exam Helper API (GPT-5 Ready) is running"));
+
+// Main endpoint
+app.post("/api/gpt", async (req, res) => {
+  try {
+    const { prompt } = req.body;
+    if (!prompt || typeof prompt !== "string") {
+      return res.status(400).json({ error: "Missing or invalid 'prompt'" });
     }
 
+    const data = await callOpenAIWithFallback(prompt);
     res.status(200).json(data);
   } catch (err) {
-    console.error("Server error:", err);
+    console.error("❌ Server Error:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-app.get("/", (_, res) => res.send("✅ TDS Exam Helper API (Expert Mode) is running"));
-
+/* ============================================================
+   🧩 Start Server
+============================================================ */
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Expert backend running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
