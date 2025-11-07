@@ -18,6 +18,11 @@
     "autoprefixer": "^10.4.20",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.10",
-    "vite": "^5.3.5"
-  }
+    "vite": "^5.3.5",
+    "patch-package": "^8.0.0",
+    "postinstall-postinstall": "^2.1.0"
+  },
+  "scripts": {
+  "postinstall": "patch-package || true"
+}
 }
